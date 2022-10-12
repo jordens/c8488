@@ -1,6 +1,8 @@
 use log::{debug, warn};
 use std::str;
 use thiserror::Error;
+use std::fs::File;
+use std::io::prelude::*;
 
 #[derive(Error, Debug)]
 enum AssemblerError {
@@ -39,10 +41,10 @@ impl Assembler {
             return Err(AssemblerError::Buffer);
         }
         let typ = buf[0];
-        let _record_length = u16::from_be_bytes(buf[1..3].try_into().unwrap());
-        let _record_index = u16::from_be_bytes(buf[3..5].try_into().unwrap());
+        let _history_length = u16::from_be_bytes(buf[1..3].try_into().unwrap());
+        let _history_index = u16::from_be_bytes(buf[3..5].try_into().unwrap());
         let length = buf[5] >> 4;
-        let current = buf[5] & 0xf;
+        let index = buf[5] & 0xf;
         let payload = &buf[7..61][..buf[6] as usize];
         let _crc = u16::from_be_bytes(buf[61..63].try_into().unwrap());
         let end = buf[63];
@@ -52,7 +54,7 @@ impl Assembler {
         }
         if self.current >= self.length {
             Err(AssemblerError::Complete)
-        } else if (self.typ, self.length, self.current + 1, 0xfd) != (typ, length, current, end) {
+        } else if (self.typ, self.length, self.current + 1, 0xfd) != (typ, length, index, end) {
             Err(AssemblerError::Format)
         } else {
             let payload = str::from_utf8(payload)?;
@@ -69,14 +71,13 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("c8488=warn"))
         .init();
 
-    let api = hidapi::HidApi::new()?;
-    let dev = api.open(0x1941, 0x8021)?;
+    let mut dev = File::open("/dev/hidraw0")?;
 
     let mut buf = [0u8; 64];
     let mut assembler = Assembler::default();
 
     loop {
-        let len = dev.read_timeout(&mut buf, 10000)?;
+        let len = dev.read(&mut buf)?;
         debug!("frame: {:X?}", &buf[..len]);
         if match assembler.push(&buf[..len]) {
             Err(AssemblerError::Complete) => true,
