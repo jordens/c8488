@@ -1,4 +1,3 @@
-use clap::Parser;
 use log::{debug, warn};
 use std::fs::File;
 use std::io::prelude::*;
@@ -70,21 +69,16 @@ impl Message {
     }
 }
 
-#[derive(Parser)]
-#[clap(author, version, about, long_about = None)]
-struct Args {
-    #[clap(short, long, default_value = "/dev/hidraw0")]
-    device: String,
-}
-
 fn main() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("c8488=warn"))
         .init();
 
-    let cli = Args::parse();
-
-    let mut dev = File::open(cli.device)?;
+    let mut dev = File::open(
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "/dev/hidraw0".to_string()),
+    )?;
 
     let mut buf = [0u8; 64];
     let mut msg = Message::default();
@@ -109,9 +103,9 @@ fn main() -> anyhow::Result<()> {
                 // human-readable message, SI units
                 0xfe => println!("{body}"),
                 // urlencode imperial units
-                0xfb => println!("{body}"),
+                // 0xfb => println!("{body}"),
                 // slash-separated rest-style, SI units
-                0xf1 => println!("{body}"),
+                // 0xf1 => println!("{body}"),
                 _ => warn!("unknown message type {typ}: {body}"),
             };
         }
