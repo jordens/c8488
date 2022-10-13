@@ -74,9 +74,9 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("c8488=warn"))
         .init();
 
+    let mut args = pico_args::Arguments::from_env();
     let mut dev = File::open(
-        std::env::args()
-            .nth(1)
+        args.opt_value_from_str("--device")?
             .unwrap_or_else(|| "/dev/hidraw0".to_string()),
     )?;
 
