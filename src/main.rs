@@ -1,7 +1,8 @@
+use chrono::NaiveDateTime;
 use log::{debug, warn};
 use std::fs::File;
 use std::io::prelude::*;
-use std::str;
+use std::str::{self, FromStr};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,10 +12,7 @@ enum MessageError {
     #[error("Invalid buffer data")]
     Format,
     #[error("String conversion")]
-    Utf8Error {
-        #[from]
-        source: std::str::Utf8Error,
-    },
+    Utf8Error(#[from] std::str::Utf8Error),
     #[error("Message was complete")]
     Complete,
 }
@@ -69,6 +67,96 @@ impl Message {
     }
 }
 
+#[derive(Error, Debug)]
+enum ReadingsError {
+    #[error("Message too short")]
+    Short,
+    #[error("Message data invalid")]
+    Invalid,
+    #[error("String conversion")]
+    Parse,
+}
+
+#[derive(Debug, Default, Copy, Clone, PartialEq, PartialOrd)]
+struct Sensor {
+    temperature: Option<f32>,
+    humidity: Option<f32>,
+}
+#[derive(Debug, Default, Clone, PartialEq, PartialOrd)]
+#[allow(dead_code)]
+struct Readings {
+    _unknown0: u8, // version? battery?
+    datetime: chrono::NaiveDateTime,
+    indoor: Sensor,
+    outdoor: Sensor,
+    rain_day: Option<f32>,
+    rain_hour: Option<f32>,
+    wind_speed: Option<f32>,
+    wind_speed_gust: Option<f32>,
+    wind_direction: Option<f32>,
+    wind_octant: Option<String>,
+    pressure_rel: Option<f32>,
+    pressure_abs: Option<f32>,
+    uv_index: Option<u8>,
+    dewpoint: Option<f32>,
+    _unknown1: Option<f32>,
+    other: [Sensor; 7],
+}
+
+fn pop<'a, T: FromStr, I: IntoIterator<Item = &'a str>>(
+    msg: &mut I,
+) -> Result<Option<T>, ReadingsError> {
+    let part = msg.into_iter().next().ok_or(ReadingsError::Short)?;
+    if part.chars().all(|s| "-.".contains(s)) {
+        Ok(None)
+    } else {
+        Ok(Some(part.parse().or(Err(ReadingsError::Parse))?))
+    }
+}
+
+impl TryFrom<&str> for Readings {
+    type Error = ReadingsError;
+
+    fn try_from(msg: &str) -> Result<Self, Self::Error> {
+        let mut msg = msg.split(' ');
+        Ok(Self {
+            _unknown0: pop(&mut msg)?.ok_or(ReadingsError::Invalid)?,
+            datetime: NaiveDateTime::parse_from_str(
+                &[
+                    msg.next().ok_or(ReadingsError::Short)?,
+                    msg.next().ok_or(ReadingsError::Short)?,
+                ]
+                .join(" "),
+                "%Y-%m-%d %H:%M",
+            )
+            .or(Err(ReadingsError::Parse))?,
+            indoor: Sensor {
+                temperature: pop(&mut msg)?,
+                humidity: pop(&mut msg)?,
+            },
+            outdoor: Sensor {
+                temperature: pop(&mut msg)?,
+                humidity: pop(&mut msg)?,
+            },
+            rain_day: pop(&mut msg)?,
+            rain_hour: pop(&mut msg)?,
+            wind_speed: pop(&mut msg)?,
+            wind_speed_gust: pop(&mut msg)?,
+            wind_direction: pop(&mut msg)?,
+            wind_octant: msg.next().map(|s| s.to_string()),
+            pressure_rel: pop(&mut msg)?,
+            pressure_abs: pop(&mut msg)?,
+            uv_index: pop(&mut msg)?,
+            dewpoint: pop(&mut msg)?,
+            _unknown1: pop(&mut msg)?,
+            other: core::array::from_fn(|_| Sensor {
+                temperature: pop(&mut msg)?,
+                humidity: pop(&mut msg)?,
+            }),
+        })
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("c8488=warn"))
@@ -88,6 +176,7 @@ fn main() -> anyhow::Result<()> {
         debug!("frame: {:X?}", &buf[..len]);
         if match msg.push(&buf[..len]) {
             Err(MessageError::Complete) => true,
+            Err(MessageError::Buffer) => Err(MessageError::Buffer)?,
             Err(err) => {
                 warn!("assembler error `{err:?}`, resetting");
                 true
@@ -101,7 +190,10 @@ fn main() -> anyhow::Result<()> {
             msg = Message::default();
             match typ {
                 // human-readable message, SI units
-                0xfe => println!("{body}"),
+                0xfe => {
+                    println!("{body}");
+                    println!("{:?}", Readings::try_from(body.as_str())?);
+                }
                 // urlencode imperial units
                 // 0xfb => println!("{body}"),
                 // slash-separated rest-style, SI units
