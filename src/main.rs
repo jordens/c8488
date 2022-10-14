@@ -1,8 +1,7 @@
-use chrono::NaiveDateTime;
 use log::{debug, warn};
 use std::fs::File;
 use std::io::prelude::*;
-use std::str::{self, FromStr};
+use std::str;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -67,94 +66,61 @@ impl Message {
     }
 }
 
-#[derive(Error, Debug)]
-enum ReadingsError {
-    #[error("Message too short")]
-    Short,
-    #[error("Message data invalid")]
-    Invalid,
-    #[error("String conversion")]
-    Parse,
-}
-
-#[derive(Debug, Default, Copy, Clone, PartialEq, PartialOrd)]
-struct Sensor {
-    temperature: Option<f32>,
-    humidity: Option<f32>,
-}
-#[derive(Debug, Default, Clone, PartialEq, PartialOrd)]
-#[allow(dead_code)]
-struct Readings {
-    _unknown0: u8, // version? battery?
-    datetime: chrono::NaiveDateTime,
-    indoor: Sensor,
-    outdoor: Sensor,
-    rain_day: Option<f32>,
-    rain_hour: Option<f32>,
-    wind_speed: Option<f32>,
-    wind_speed_gust: Option<f32>,
-    wind_direction: Option<f32>,
-    wind_octant: Option<String>,
-    pressure_rel: Option<f32>,
-    pressure_abs: Option<f32>,
-    uv_index: Option<u8>,
-    dewpoint: Option<f32>,
-    _unknown1: Option<f32>,
-    other: [Sensor; 7],
-}
-
-fn pop<'a, T: FromStr, I: IntoIterator<Item = &'a str>>(
-    msg: &mut I,
-) -> Result<Option<T>, ReadingsError> {
-    let part = msg.into_iter().next().ok_or(ReadingsError::Short)?;
-    if part.chars().all(|s| "-.".contains(s)) {
-        Ok(None)
-    } else {
-        Ok(Some(part.parse().or(Err(ReadingsError::Parse))?))
+fn idb(msg: &str, station: &str) -> String {
+    let mut s = String::new();
+    s.push_str("weather,station=");
+    s.push_str(station);
+    s.push(' ');
+    for (value, key) in msg.split(' ').zip([
+        "channel",
+        "_date",
+        "_time",
+        "indoor_temp",
+        "indoor_humidity",
+        "temp",     // outdoor
+        "humidity", // outdoor
+        "rain",     // rain mm/d
+        "rate",     // rain mm/h
+        "wind",     // wind mean km/h
+        "gust",     // wind gusts km/h
+        "dir",      // wind direction
+        "wind_octant",
+        "pressure",
+        "pressure_local",
+        "uv_index",
+        "dew", // outdoor
+        "outdoor_heat_index",
+        "sensor1_temp",
+        "sensor1_humidity",
+        "sensor2_temp",
+        "sensor2_humidity",
+        "sensor3_temp",
+        "sensor3_humidity",
+        "sensor4_temp",
+        "sensor4_humidity",
+        "sensor5_temp",
+        "sensor5_humidity",
+        "sensor6_temp",
+        "sensor6_humidity",
+        "sensor7_temp",
+        "sensor7_humidity",
+    ]) {
+        if key.starts_with('_') || value.chars().all(|s| "-.".contains(s)) {
+            continue;
+        }
+        s.push_str(key);
+        s.push('=');
+        if key.ends_with("octant") {
+            s.push('"');
+        }
+        s.push_str(value);
+        if key.ends_with("octant") {
+            s.push('"');
+        }
+        s.push(',');
     }
-}
-
-impl TryFrom<&str> for Readings {
-    type Error = ReadingsError;
-
-    fn try_from(msg: &str) -> Result<Self, Self::Error> {
-        let mut msg = msg.split(' ');
-        Ok(Self {
-            _unknown0: pop(&mut msg)?.ok_or(ReadingsError::Invalid)?,
-            datetime: NaiveDateTime::parse_from_str(
-                &[
-                    msg.next().ok_or(ReadingsError::Short)?,
-                    msg.next().ok_or(ReadingsError::Short)?,
-                ]
-                .join(" "),
-                "%Y-%m-%d %H:%M",
-            )
-            .or(Err(ReadingsError::Parse))?,
-            indoor: Sensor {
-                temperature: pop(&mut msg)?,
-                humidity: pop(&mut msg)?,
-            },
-            outdoor: Sensor {
-                temperature: pop(&mut msg)?,
-                humidity: pop(&mut msg)?,
-            },
-            rain_day: pop(&mut msg)?,
-            rain_hour: pop(&mut msg)?,
-            wind_speed: pop(&mut msg)?,
-            wind_speed_gust: pop(&mut msg)?,
-            wind_direction: pop(&mut msg)?,
-            wind_octant: msg.next().map(|s| s.to_string()),
-            pressure_rel: pop(&mut msg)?,
-            pressure_abs: pop(&mut msg)?,
-            uv_index: pop(&mut msg)?,
-            dewpoint: pop(&mut msg)?,
-            _unknown1: pop(&mut msg)?,
-            other: core::array::from_fn(|_| Sensor {
-                temperature: pop(&mut msg)?,
-                humidity: pop(&mut msg)?,
-            }),
-        })
-    }
+    s.remove(s.len() - 1);
+    s
 }
 
 fn main() -> anyhow::Result<()> {
@@ -167,10 +133,20 @@ fn main() -> anyhow::Result<()> {
         args.opt_value_from_str("--device")?
             .unwrap_or_else(|| "/dev/hidraw0".to_string()),
     )?;
+    let station: String = args
+        .opt_value_from_str("--station")?
+        .unwrap_or_else(|| "c8488".to_string());
+    let socket = std::net::UdpSocket::bind(
+        args.opt_value_from_str("--bind")?
+            .unwrap_or_else(|| "0.0.0.0:0".to_string()),
+    )?;
+    let target: Option<std::net::SocketAddr> = args.opt_value_from_str("--target")?;
+    let every: u32 = args.opt_value_from_str("--every")?.unwrap_or(50);
 
     let mut buf = [0u8; 64];
     let mut msg = Message::default();
 
+    let mut i = 0;
     loop {
         let len = dev.read(&mut buf)?;
         debug!("frame: {:X?}", &buf[..len]);
@@ -191,8 +167,16 @@ fn main() -> anyhow::Result<()> {
             match typ {
                 // human-readable message, SI units
                 0xfe => {
-                    println!("{body}");
-                    println!("{:?}", Readings::try_from(body.as_str())?);
+                    if i > 0 {
+                        i -= 1;
+                    } else {
+                        i = every;
+                        let s = idb(&body, &station);
+                        println!("{}", s);
+                        if let Some(t) = target.as_ref() {
+                            socket.send_to(s.as_bytes(), t)?;
+                        }
+                    }
                 }
                 // urlencode imperial units
                 // 0xfb => println!("{body}"),
