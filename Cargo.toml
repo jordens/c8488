@@ -1,6 +1,12 @@
 [package]
 name = "c8488"
 version = "0.1.0"
+description = "PC weather station (Bresser 5-in-1, 6-in-1 PC and other CCLEL C8488 clones) to Influxdb logger"
+authors = ["Robert Jördens <rj@quartiq.de>"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/jordens/c8488"
+repository = "https://github.com/jordens/c8488.git"
+documentation = "https://docs.rs/c8488"
 edition = "2021"
 
 [dependencies]
