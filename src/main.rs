@@ -1,4 +1,4 @@
-use chrono::{Datelike, Local, Timelike};
+use chrono::prelude::*;
 use log::{debug, warn};
 use std::fs::File;
 use std::io::prelude::*;
@@ -120,7 +120,7 @@ fn idb(msg: &str, station: &str) -> String {
         }
         s.push(',');
     }
-    s.remove(s.len() - 1);
+    s.pop();
     s
 }
 
@@ -134,23 +134,27 @@ fn main() -> anyhow::Result<()> {
         args.opt_value_from_str("--device")?
             .unwrap_or_else(|| "/dev/hidraw0".to_string()),
     )?;
-    if args.contains("--datetime") {
-        let dt = Local::now();
-        let mut buf = [
-            0xfc,
-            0x08,
-            (dt.year() - 2000) as _,
-            dt.month() as _,
-            dt.day() as _,
-            0x00,
-            0x00,
-            0xfd,
-        ];
-        dev.write_all(&buf)?;
-        buf[1..5].copy_from_slice(&[0x09, dt.hour() as _, dt.minute() as _, dt.second() as _]);
-        dev.write_all(&buf)?;
-    }
-    let station: String = args
+    
+    let dt = if let Some(tz) = args.opt_value_from_str::<_, i32>("--timezone")? {
+        Utc::now().with_timezone(&FixedOffset::east(tz * 3600))
+    } else {
+        Local::now().into()
+    };
+    let mut buf = [0; 9];
+    buf[1] = 0xfc;
+    buf[8] = 0xfd;
+    buf[2] = 0x08;
+    buf[3] = (dt.year() - 2000) as _;
+    buf[4] = dt.month() as _;
+    buf[5] = dt.day() as _;
+    dev.write_all(&buf)?;
+    buf[2] = 0x09;
+    buf[3] = dt.hour() as _;
+    buf[4] = dt.minute() as _;
+    buf[5] = dt.second() as _;
+    dev.write_all(&buf)?;
+
+    let station = args
         .opt_value_from_str("--station")?
         .unwrap_or_else(|| "c8488".to_string());
     let socket = std::net::UdpSocket::bind(
@@ -158,9 +162,9 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "0.0.0.0:0".to_string()),
     )?;
     let target: Option<std::net::SocketAddr> = args.opt_value_from_str("--target")?;
-    let every: u32 = args.opt_value_from_str("--every")?.unwrap_or(0);
+    let every = args.opt_value_from_str("--every")?.unwrap_or(0);
 
-    let mut buf = [0u8; 64];
+    let mut buf = [0; 64];
     let mut msg = Message::default();
 
     let mut i = 0;
