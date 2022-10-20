@@ -19,11 +19,13 @@ Original protocol deciphering work from [`weewx-ws6in1`](https://github.com/BobA
 
 * Uses `hidraw` kernel driver to access the weather station (load that module and ensure it binds the device, also ensure RW access to the respective `hidraw` character device node)
 * Does not need libusb or hidapi
-* Sets time and date of the westher station (so that rain quantity reset time is correct)
+* Configures time and date so that rain quantity reset time is correct
 * Optionally exports reports receveived to influxdb line protocol and sends via UDP
 
 ## Compile
 
 E.g. for openwrt on mips architectures:
 
-`cross +nightly build --release --target mips-unknown-linux-musl -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort`
+* Install `cross`
+* Run `cross +nightly build --release --target mips-unknown-linux-musl -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort`
+* Get a small-ish (~ 100 kB) binary
