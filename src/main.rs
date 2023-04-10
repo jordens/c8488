@@ -134,9 +134,9 @@ fn main() -> anyhow::Result<()> {
         args.opt_value_from_str("--device")?
             .unwrap_or_else(|| "/dev/hidraw0".to_string()),
     )?;
-    
+
     let dt = if let Some(tz) = args.opt_value_from_str::<_, i32>("--timezone")? {
-        Utc::now().with_timezone(&FixedOffset::east(tz * 3600))
+        Utc::now().with_timezone(&FixedOffset::east_opt(tz * 3600).unwrap())
     } else {
         Local::now().into()
     };
